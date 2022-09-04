@@ -1,0 +1,45 @@
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 'commit sha which will be checked'
+        required: true
+        type: string
+      container_repo:
+        description: 'Name of docker image repo to check'
+        required: true
+        type: string
+      slack_fails_channel:
+        description: 'Where to send Action failures'
+        required: true
+        type: string
+
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Configure AWS credentials
+      id: aws-login
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.BUILD_AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.BUILD_AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.BUILD_AWS_REGION }} 
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    - name: Check tag exists
+      id: check-tag
+      run: docker manifest inspect ${{ secrets.ECR_REPOSITORY_URL }}/${{ inputs.container_repo }}:${{ inputs.commit_sha }} >/dev/null
+
+    - uses: act10ns/slack@v1
+      id: slack-on-fail
+      with:
+        status: ${{ job.status }}
+        steps: ${{ toJson(steps) }}
+        channel: '${{ inputs.slack_fails_channel }}'
+      if: ${{ failure() }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

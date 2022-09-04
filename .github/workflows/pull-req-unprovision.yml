@@ -1,0 +1,77 @@
+name: Branch unprovision
+
+on:
+  workflow_call:
+    inputs:
+      git_ref:
+        required: true
+        type: string
+      commit_sha:
+        description: 'checkout from this commit'
+        required: true
+        type: string
+      namespace:
+        description: 'Kubernetes namespace to deploy to'
+        required: true
+        type: string
+      directory:
+        description: 'Kubernetes manifests directory'
+        required: true
+        type: string
+      platform:
+        description: 'DEV,SANDBOX or PROD'
+        required: true
+        type: string
+      slack_fails_channel:
+        description: 'Where to send Action failures'
+        required: true
+        type: string
+
+
+jobs:
+  unprovision:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Extract env slug
+      id: get-slug
+      shell: bash
+      run: >
+        echo -n SLUG=$(echo "${{ inputs.git_ref }}"|
+         tr '[:upper:]_/' '[:lower:]--' |
+         tr -cd '[a-zA-Z0-9-]' |
+         cut -b -20 | sed -r 's/[-]+$//' ) >> $GITHUB_ENV
+
+    - uses: actions/checkout@master
+      id: git-checkout
+      with:
+        ref: ${{ inputs.commit_sha }}
+
+    - uses: tenhaus/get-release-or-tag@v2
+      id: tag
+
+    - name: append commit hash into image:<tag> placeholder and set label:release
+      id: sed
+      run: |
+        sed -i "s/GITHUB_SHA_SED_PLACEHOLDER/${{ inputs.commit_sha }}/"   kube/*/*.yaml
+        sed -i "s/GITHUB_SLUG_SED_PLACEHOLDER/${{ env.SLUG }}/"     kube/*/*.yaml
+        sed -i "s#{{{GITHUB_TAG}}}#${{ steps.tag.outputs.tag }}#"   kube/*/*.yaml 
+ 
+    - name: Unprovision
+      id: branch-unprovision
+      uses: gvych/eks-kubectl-action@master
+      with:
+        aws_access_key_id:     ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', inputs.platform)] }}
+        aws_secret_access_key: ${{ secrets[format('{0}_AWS_SECRET_ACCESS_KEY', inputs.platform)] }}
+        aws_region:            ${{ secrets[format('{0}_AWS_REGION', inputs.platform)] }}
+        cluster_name:          ${{ secrets[format('{0}_CLUSTER_NAME', inputs.platform)] }}
+        args: delete -k ${{ inputs.directory }} -n ${{ inputs.namespace }}
+
+    - uses: act10ns/slack@v1
+      with:
+        status:   ${{ job.status }}
+        steps:    ${{ toJson(steps) }}
+        channel: '${{ inputs.slack_fails_channel }}'
+      if:         ${{ failure() }}
+      id: slack-notify
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

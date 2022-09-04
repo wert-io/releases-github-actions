@@ -1,0 +1,72 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 'checkout from this commit'
+        required: true
+        type: string
+      deployment_name:
+        description: 'Name of Deployment kubernetes resource'
+        required: true
+        type: string
+      namespace:
+        description: 'Kubernetes namespace to deploy to'
+        required: true
+        type: string
+      directory:
+        description: 'Kubernetes manifests directory'
+        required: true
+        type: string
+      platform:
+        description: 'DEV,SANDBOX or PROD'
+        required: true
+        type: string
+      slack_fails_channel:
+        description: 'Where to send Action failures'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+      id: git-checkout
+      with:
+        ref: ${{ inputs.commit_sha }}
+
+    - name: append commit hash into image:<tag> placeholder
+      run: |
+        sed -i "s/GITHUB_SHA_SED_PLACEHOLDER/${{ inputs.commit_sha }}/" kube/*/*.yaml
+
+    - name: Deploy to ${{ inputs.platform }}
+      id: deploy
+      uses: gvych/eks-kubectl-action@master
+      with:
+        aws_access_key_id:     ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', inputs.platform)] }}
+        aws_secret_access_key: ${{ secrets[format('{0}_AWS_SECRET_ACCESS_KEY', inputs.platform)] }}
+        aws_region:            ${{ secrets[format('{0}_AWS_REGION', inputs.platform)] }}
+        cluster_name:          ${{ secrets[format('{0}_CLUSTER_NAME', inputs.platform)] }}
+        args: apply -k ${{ inputs.directory }} --record -n ${{ inputs.namespace }}
+
+    - name: Wait for rollout to finish
+      id: wait-for-deploy-ready
+      uses: gvych/eks-kubectl-action@master
+      with:
+        aws_access_key_id:     ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', inputs.platform)] }}
+        aws_secret_access_key: ${{ secrets[format('{0}_AWS_SECRET_ACCESS_KEY', inputs.platform)] }}
+        aws_region:            ${{ secrets[format('{0}_AWS_REGION', inputs.platform)] }}
+        cluster_name:          ${{ secrets[format('{0}_CLUSTER_NAME', inputs.platform)] }}
+        args: rollout status --timeout=5m deployment/${{ inputs.deployment_name }} -n ${{ inputs.namespace }}
+
+    - uses: act10ns/slack@v1
+      id: slack-on-failure
+      with:
+        status: ${{ job.status }}
+        steps: ${{ toJson(steps) }}
+        channel: '${{ inputs.slack_fails_channel }}'
+      if: ${{ failure() }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

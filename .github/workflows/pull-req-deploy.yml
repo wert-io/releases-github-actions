@@ -1,0 +1,139 @@
+name: Branch build/deploy
+
+on:
+  workflow_call:
+    inputs:
+      git_ref:
+        required: true
+        type: string
+      commit_sha:
+        description: 'checkout from this commit'
+        required: true
+        type: string
+      issue_number:
+        required: true
+        type: string
+      prefix:
+        description: 'component short name for uniq URL creation'
+        required: true
+        type: string
+
+#      deployment_name:
+#        description: 'Name of Deployment kubernetes resource'
+#        required: true
+#        type: string
+      namespace:
+        description: 'Kubernetes namespace to deploy to'
+        required: true
+        type: string
+      directory:
+        description: 'Kubernetes manifests directory'
+        required: true
+        type: string
+      platform:
+        description: 'DEV,SANDBOX or PROD'
+        required: true
+        type: string
+      slack_fails_channel:
+        description: 'Where to send Action failures'
+        required: true
+        type: string
+
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+#    - name: search for comment with custom backend branch
+#      uses:  peter-evans/find-comment@v1.2.0
+#      id: find-comment
+#      with:
+#        body-includes: "/backend-branch"
+#        direction: "last"
+#        issue-number: ${{ inputs.issue_number }}
+
+#    - name: create slug from comment
+#      if: steps.find-comment.outputs.comment-id != 0
+#      id: comment-slug
+#      shell: bash
+#      run: >
+#        echo "'${{ steps.find-comment.outputs.comment-body }}'" | head -1  |
+#         sed 's#/backend-branch[ :]*##' |
+#         tr '[:upper:]_/' '[:lower:]--' |
+#         tr -cd '[a-zA-Z0-9-]' |
+#         cut -b -20 | sed -r 's/[-]+$//' | tr -d '\r\n' > ./file;
+#        cat ./file|od -a;
+#        echo "SLUG=$(<./file)" >> $GITHUB_ENV; rm ./file;
+
+    - name: Extract env slug
+      id: get-slug
+#      if: steps.find-comment.outputs.comment-id == 0
+      shell: bash
+      run: >
+        echo -n SLUG=$(echo "${{ inputs.git_ref }}"|
+         tr '[:upper:]_/' '[:lower:]--' |
+         tr -cd '[a-zA-Z0-9-]' |
+         cut -b -20 | sed -r 's/[-]+$//' ) >> $GITHUB_ENV
+
+    - uses: bobheadxi/deployments@v0.6.0
+      id: github-deployment
+      with:
+        step: start
+        token: ${{ secrets.GITHUB_TOKEN }}
+        env: ${{ env.SLUG }}
+        transient: true
+        ref: ${{ inputs.git_ref }}
+        desc: Review branch for merge request
+
+    - uses: actions/checkout@master
+      id: git-checkout
+      with:
+        ref: ${{ inputs.commit_sha }}
+
+    - uses: tenhaus/get-release-or-tag@v2
+      id: tag
+
+    - name: append commit hash into image:<tag> placeholder and set label:release
+      id: sed
+      run: |
+        sed -i "s/GITHUB_SHA_SED_PLACEHOLDER/${{ inputs.commit_sha }}/"   kube/*/*.yaml
+        sed -i "s/GITHUB_SLUG_SED_PLACEHOLDER/${{ env.SLUG }}/"           kube/*/*.yaml
+        sed -i "s#{{{GITHUB_TAG}}}#${{ steps.tag.outputs.tag }}#"         kube/*/*.yaml
+
+#    - name: update links to other services origin if non-default slug
+#      id: sed-cards-reg
+#      if: steps.find-comment.outputs.comment-id != 0
+#      run: |
+#        sed -i "s#GITHUB_SLUG_BACKEND_PLACEHOLDER#${{ env.SLUG }}#" kube/*/*.yaml
+
+    - name: Deploy
+      id: branch-deploy-default
+      uses: gvych/eks-kubectl-action@master
+      with:
+        aws_access_key_id:     ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', inputs.platform)] }}
+        aws_secret_access_key: ${{ secrets[format('{0}_AWS_SECRET_ACCESS_KEY', inputs.platform)] }}
+        aws_region:            ${{ secrets[format('{0}_AWS_REGION', inputs.platform)] }}
+        cluster_name:          ${{ secrets[format('{0}_CLUSTER_NAME', inputs.platform)] }}
+        args: apply -k ${{ inputs.directory }} --record -n ${{ inputs.namespace }}
+
+    - name: Update deployment status
+      uses: bobheadxi/deployments@v0.6.0
+      id: update-github-deployment
+      with:
+        step: finish
+        token: ${{ secrets.GITHUB_TOKEN }}
+        status: ${{ job.status }}
+        env: ${{ env.SLUG }}
+        env_url: https://${{ inputs.prefix }}-${{ env.SLUG }}.sha2.me
+        deployment_id: ${{ steps.github-deployment.outputs.deployment_id }}
+        desc: Review branch for merge request
+
+    - uses: act10ns/slack@v1
+      with:
+        status:   ${{ job.status }}
+        steps:    ${{ toJson(steps) }}
+        channel: '${{ inputs.slack_fails_channel }}'
+      if:         ${{ failure() }}
+      id: slack-notify
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

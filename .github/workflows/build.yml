@@ -1,0 +1,52 @@
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 'commit sha which will be built'
+        required: true
+        type: string
+      slack_fails_channel:
+        description: 'Where to send Action failures'
+        required: true
+        type: string
+
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+    - uses: actions/checkout@master
+      id: git-checkout
+      with:
+        ref: ${{ inputs.commit_sha }}
+
+    - name: Login to ECR
+      id: ecr-login
+      uses: elgohr/ecr-login-action@1.0.1
+      with:
+        access_key: ${{ secrets.BUILD_AWS_ACCESS_KEY_ID }}
+        secret_access_key: ${{ secrets.BUILD_AWS_SECRET_ACCESS_KEY }}
+        region: ${{ secrets.BUILD_AWS_REGION }}
+
+    - name: docker login
+      id: docker-login
+      run: |
+        docker login --username ${{ steps.ecr-login.outputs.username }} --password ${{ steps.ecr-login.outputs.password }} ${{ secrets.ECR_REPOSITORY_URL }}
+
+    - name: werf build-and-publish
+      id: build-and-publish
+      run: |
+        type multiwerf && . $(multiwerf use 1.1 stable --as-file)
+        DOCKER_BUILDKIT=1 werf build-and-publish -s=:local  -i="${{ secrets.ECR_REPOSITORY_URL }}" --tag-git-commit="${{ inputs.commit_sha }}"
+
+    - uses: act10ns/slack@v1
+      id: slack-on-failure
+      with:
+        status: ${{ job.status }}
+        steps: ${{ toJson(steps) }}
+        channel: '${{ inputs.slack_fails_channel }}'
+      if: ${{ failure() }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
