@@ -58,6 +58,7 @@ jobs:
  
     - name: Unprovision
       id: branch-unprovision
+      continue-on-error: true
       uses: gvych/eks-kubectl-action@master
       with:
         aws_access_key_id:     ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', inputs.platform)] }}
