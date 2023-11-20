@@ -21,7 +21,12 @@ jobs:
       id: git-checkout
       with:
         ref: ${{ inputs.commit_sha }}
-
+        
+    - name: Install werf
+      uses: werf/actions/install@v1.1
+      with:
+        channel: stable
+        
     - name: Login to ECR
       id: ecr-login
       uses: elgohr/ecr-login-action@1.0.1
@@ -38,7 +43,7 @@ jobs:
     - name: werf build-and-publish
       id: build-and-publish
       run: |
-        type multiwerf && . $(multiwerf use 1.1 stable --as-file)
+        # type multiwerf && . $(multiwerf use 1.1 stable --as-file)
         DOCKER_BUILDKIT=1 werf build-and-publish -s=:local  -i="${{ secrets.ECR_REPOSITORY_URL }}" --tag-git-commit="${{ inputs.commit_sha }}"
 
     - uses: act10ns/slack@v1
