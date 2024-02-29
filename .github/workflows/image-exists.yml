@@ -18,6 +18,9 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    with:
+      commit_sha: ${{ inputs.commit_sha }}
+      slack_fails_channel: ${{ inputs.slack_fails_channel }}
     secrets: inherit
   # check:
   #   runs-on: ubuntu-latest
